@@ -9,6 +9,9 @@ import json
 import subprocess
 import sys
 import os
+import requests
+import base64
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from mcp.server import Server
@@ -56,18 +59,72 @@ class ReviewComment(BaseModel):
     category: str
     suggestion: Optional[str] = None
 
-def run_az_command(cmd: List[str]) -> tuple[bool, str, str]:
-    """Execute Azure CLI command and return success, stdout, stderr."""
+def run_command(cmd: List[str], cwd: Optional[str] = None) -> tuple[bool, str, str]:
+    """Execute command and return success, stdout, stderr."""
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            cwd=cwd
         )
         return result.returncode == 0, result.stdout, result.stderr
     except Exception as e:
         return False, "", str(e)
+
+def run_az_command(cmd: List[str]) -> tuple[bool, str, str]:
+    """Execute Azure CLI command and return success, stdout, stderr."""
+    return run_command(cmd)
+
+def parse_pr_url(pr_url: str) -> tuple[bool, Dict[str, str]]:
+    """Parse Azure DevOps PR URL to extract components."""
+    # Handle both formats:
+    # https://msazure.visualstudio.com/One/_git/azlocal-overlay/pullrequest/12479934
+    # https://dev.azure.com/msazure/One/_git/azlocal-overlay/pullrequest/12479934
+    
+    patterns = [
+        # visualstudio.com format
+        r'https://([^.]+)\.visualstudio\.com/([^/]+)/_git/([^/]+)/pullrequest/(\d+)',
+        # dev.azure.com format
+        r'https://dev\.azure\.com/([^/]+)/([^/]+)/_git/([^/]+)/pullrequest/(\d+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.match(pattern, pr_url)
+        if match:
+            if 'visualstudio.com' in pattern:
+                org, project, repo, pr_id = match.groups()
+                return True, {
+                    'organization': org,
+                    'project': project,
+                    'repository': repo,
+                    'pr_id': pr_id,
+                    'base_url': 'https://dev.azure.com'  # Always use dev.azure.com for API
+                }
+            else:
+                org, project, repo, pr_id = match.groups()
+                return True, {
+                    'organization': org,
+                    'project': project,
+                    'repository': repo,
+                    'pr_id': pr_id,
+                    'base_url': 'https://dev.azure.com'
+                }
+    
+    return False, {}
+
+def get_access_token() -> tuple[bool, str]:
+    """Get Azure DevOps access token from Azure CLI."""
+    success, stdout, stderr = run_az_command(["az", "account", "get-access-token", "--resource", "499b84ac-1321-427f-aa17-267ca6975798", "--output", "json"])
+    if success:
+        try:
+            token_data = json.loads(stdout)
+            return True, token_data["accessToken"]
+        except (json.JSONDecodeError, KeyError):
+            return False, "Failed to parse access token"
+    else:
+        return False, f"Failed to get access token: {stderr}"
 
 def check_az_login() -> tuple[bool, str]:
     """Check if user is logged into Azure CLI."""
@@ -81,14 +138,12 @@ def check_az_login() -> tuple[bool, str]:
     else:
         return False, f"Not logged in: {stderr}"
 
-def get_pr_details(pr_id: str, organization: str, project: str, repository: str) -> tuple[bool, Union[PRInfo, str]]:
+def get_pr_details(pr_id: str, organization: str) -> tuple[bool, Union[PRInfo, str]]:
     """Get PR details from Azure DevOps."""
     cmd = [
         "az", "repos", "pr", "show",
         "--id", pr_id,
-        "--organization", f"https://dev.azure.com/{organization}",
-        "--project", project,
-        "--repository", repository,
+        "--organization", organization,
         "--output", "json"
     ]
     
@@ -107,80 +162,229 @@ def get_pr_details(pr_id: str, organization: str, project: str, repository: str)
             author=pr_data["createdBy"]["displayName"],
             status=pr_data["status"],
             created_date=pr_data["creationDate"],
-            repository=repository,
+            repository=pr_data["repository"]["name"],
             organization=organization,
-            project=project
+            project=pr_data["repository"]["project"]["name"]
         )
         return True, pr_info
     except (json.JSONDecodeError, KeyError) as e:
         return False, f"Failed to parse PR data: {e}"
 
-def get_pr_files(pr_id: str, organization: str, project: str, repository: str) -> tuple[bool, Union[List[FileChange], str]]:
-    """Get list of changed files in PR."""
-    cmd = [
-        "az", "repos", "pr", "list-files",
-        "--id", pr_id,
-        "--organization", f"https://dev.azure.com/{organization}",
-        "--project", project,
-        "--repository", repository,
-        "--output", "json"
-    ]
-    
-    success, stdout, stderr = run_az_command(cmd)
+def get_pr_files(pr_url: str) -> tuple[bool, Union[List[FileChange], str]]:
+    """Get list of changed files in PR using REST API from PR URL."""
+    # Parse the PR URL
+    success, url_parts = parse_pr_url(pr_url)
     if not success:
-        return False, f"Failed to get PR files: {stderr}"
+        return False, f"Invalid PR URL format. Expected format: https://msazure.visualstudio.com/One/_git/repo/pullrequest/123 or https://dev.azure.com/org/project/_git/repo/pullrequest/123"
+    
+    # Get access token
+    token_success, token = get_access_token()
+    if not token_success:
+        return False, f"Failed to get access token: {token}"
+    
+    organization = url_parts['organization']
+    project = url_parts['project']
+    repository = url_parts['repository']
+    pr_id = url_parts['pr_id']
+    
+    # Build API URL according to Microsoft docs
+    api_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations?api-version=7.1"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
     
     try:
-        files_data = json.loads(stdout)
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()
+        iterations_data = response.json()
+        
+        if not iterations_data.get("value"):
+            return False, "No iterations found in PR"
+        
+        # Get the latest iteration
+        latest_iteration = iterations_data["value"][-1]["id"]
+        
+        # Get changed files for this iteration
+        changes_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations/{latest_iteration}/changes?api-version=7.1"
+        changes_response = requests.get(changes_url, headers=headers)
+        changes_response.raise_for_status()
+        changes_data = changes_response.json()
+        
         changes = []
-        for file_data in files_data:
-            change = FileChange(
-                path=file_data["path"],
-                change_type=file_data["changeType"],
-                original_path=file_data.get("originalPath")
-            )
-            changes.append(change)
+        for change_item in changes_data.get("changeEntries", []):
+            item = change_item.get("item", {})
+            change_type = change_item.get("changeType", "").lower()
+
+            # Handle deleted files (where path is null but originalPath exists)
+            if change_type == "delete":
+                original_path = change_item.get("originalPath")
+                if original_path:
+                    change = FileChange(
+                        path=original_path,
+                        change_type="delete",
+                        original_path=original_path
+                    )
+                    changes.append(change)
+            # Handle added or edited files
+            elif item.get("path"):
+                change = FileChange(
+                    path=item["path"],
+                    change_type=change_type or "edit",
+                    original_path=change_item.get("originalPath")
+                )
+                changes.append(change)
+        
         return True, changes
+    except requests.RequestException as e:
+        return False, f"Failed to get PR files: {str(e)}. URL attempted: {api_url}"
     except (json.JSONDecodeError, KeyError) as e:
-        return False, f"Failed to parse files data: {e}"
+        return False, f"Failed to parse PR files data: {e}"
 
 def get_file_content(file_path: str, organization: str, project: str, repository: str, commit_id: str) -> tuple[bool, str]:
-    """Get content of a specific file from the repository."""
-    cmd = [
-        "az", "repos", "item", "show",
-        "--path", file_path,
-        "--organization", f"https://dev.azure.com/{organization}",
-        "--project", project,
-        "--repository", repository,
-        "--version-type", "commit",
-        "--version", commit_id
-    ]
-    
-    success, stdout, stderr = run_az_command(cmd)
+    """Get content of a specific file from the repository using REST API."""
+    success, token = get_access_token()
     if not success:
-        return False, f"Failed to get file content: {stderr}"
+        return False, f"Failed to get access token: {token}"
     
-    return True, stdout
+    # Extract organization name from URL and clean it up
+    if organization.startswith('https://'):
+        org_name = organization.split('/')[-1]
+        org_name = org_name.replace('.visualstudio.com', '')
+    else:
+        org_name = organization
+    
+    # Clean up repository name
+    clean_repo = repository.replace('_git/', '').replace('_git', '')
+    
+    # Azure DevOps REST API endpoint for file content
+    url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{clean_repo}/items?path={file_path}&version={commit_id}&api-version=7.0"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        
+        # Check if content is base64 encoded
+        content_type = response.headers.get('content-type', '')
+        if 'application/json' in content_type:
+            # If JSON response, it might contain base64 encoded content
+            data = response.json()
+            if 'content' in data:
+                try:
+                    # Try to decode base64 content
+                    content = base64.b64decode(data['content']).decode('utf-8')
+                    return True, content
+                except Exception:
+                    return True, data['content']
+            else:
+                return False, "No content found in response"
+        else:
+            # Direct text content
+            return True, response.text
+            
+    except requests.RequestException as e:
+        return False, f"Failed to get file content: {str(e)}"
+    except Exception as e:
+        return False, f"Failed to process file content: {str(e)}"
 
-def post_pr_comment(pr_id: str, organization: str, project: str, repository: str, 
-                   file_path: str, line: int, comment: str) -> tuple[bool, str]:
-    """Post a comment to a PR."""
-    cmd = [
-        "az", "repos", "pr", "create-comment",
-        "--id", pr_id,
-        "--organization", f"https://dev.azure.com/{organization}",
-        "--project", project,
-        "--repository", repository,
-        "--content", comment,
-        "--path", file_path,
-        "--position", str(line)
-    ]
+def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id: str, 
+                        comment: str, file_path: Optional[str] = None, 
+                        line_number: Optional[int] = None) -> tuple[bool, str]:
+    """Post a comment to a PR using REST API.
     
-    success, stdout, stderr = run_az_command(cmd)
+    Args:
+        organization: Azure DevOps organization name
+        project: Project name
+        repository: Repository name  
+        pr_id: Pull Request ID
+        comment: Comment text
+        file_path: Optional file path for file-specific comments
+        line_number: Optional line number (requires file_path)
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    # Validate parameters
+    if line_number is not None and file_path is None:
+        return False, "line_number requires file_path to be specified"
+    
+    # Get access token
+    success, token = get_access_token()
     if not success:
-        return False, f"Failed to post comment: {stderr}"
+        return False, f"Failed to get access token: {token}"
     
-    return True, "Comment posted successfully"
+    # Clean organization name if it contains URL
+    if organization.startswith('https://'):
+        org_name = organization.split('/')[-1]
+        org_name = org_name.replace('.visualstudio.com', '')
+    else:
+        org_name = organization
+    
+    # Build API URL
+    api_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/threads?api-version=7.1"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    # Build payload
+    payload = {
+        "comments": [
+            {
+                "parentCommentId": 0,
+                "content": comment,
+                "commentType": 1  # Text comment
+            }
+        ],
+        "status": 1  # Active status
+    }
+    
+    # Add thread context for file-specific comments
+    if file_path:
+        thread_context = {
+            "filePath": file_path
+        }
+        
+        # Add line-specific context if line number provided
+        if line_number is not None:
+            thread_context["rightFileStart"] = {
+                "line": line_number,
+                "offset": 1
+            }
+            thread_context["rightFileEnd"] = {
+                "line": line_number,
+                "offset": 1
+            }
+        
+        payload["threadContext"] = thread_context
+    
+    try:
+        response = requests.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
+        
+        # Parse response to get comment details
+        result = response.json()
+        thread_id = result.get("id", "unknown")
+        
+        if file_path:
+            if line_number:
+                return True, f"File comment posted successfully on {file_path}:{line_number} (Thread ID: {thread_id})"
+            else:
+                return True, f"File comment posted successfully on {file_path} (Thread ID: {thread_id})"
+        else:
+            return True, f"General PR comment posted successfully (Thread ID: {thread_id})"
+            
+    except requests.RequestException as e:
+        return False, f"Failed to post comment: {str(e)}. URL: {api_url}"
+    except (json.JSONDecodeError, KeyError) as e:
+        return False, f"Failed to parse response: {e}"
 
 # Initialize MCP Server
 server = Server("ado-pr-review")
@@ -210,49 +414,29 @@ async def handle_list_tools() -> List[Tool]:
                     },
                     "organization": {
                         "type": "string",
-                        "description": "Azure DevOps organization name"
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Project name"
-                    },
-                    "repository": {
-                        "type": "string",
-                        "description": "Repository name"
+                        "description": "Azure DevOps organization URL (e.g., https://dev.azure.com/MyOrganization)"
                     }
                 },
-                "required": ["pr_id", "organization", "project", "repository"]
+                "required": ["pr_id", "organization"]
             }
         ),
         Tool(
             name="get_pr_files",
-            description="Get list of changed files in a Pull Request",
+            description="Get list of changed files in a Pull Request from PR URL",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "pr_id": {
+                    "pr_url": {
                         "type": "string",
-                        "description": "Pull Request ID"
-                    },
-                    "organization": {
-                        "type": "string",
-                        "description": "Azure DevOps organization name"
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Project name"
-                    },
-                    "repository": {
-                        "type": "string",
-                        "description": "Repository name"
+                        "description": "Full PR URL (e.g., https://msazure.visualstudio.com/One/_git/azlocal-overlay/pullrequest/12479934)"
                     }
                 },
-                "required": ["pr_id", "organization", "project", "repository"]
+                "required": ["pr_url"]
             }
         ),
         Tool(
             name="get_file_content",
-            description="Get content of a specific file from the repository",
+            description="Get content of a specific file from the repository using REST API",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -262,7 +446,7 @@ async def handle_list_tools() -> List[Tool]:
                     },
                     "organization": {
                         "type": "string",
-                        "description": "Azure DevOps organization name"
+                        "description": "Azure DevOps organization URL (e.g., https://dev.azure.com/MyOrganization)"
                     },
                     "project": {
                         "type": "string",
@@ -282,7 +466,7 @@ async def handle_list_tools() -> List[Tool]:
         ),
         Tool(
             name="post_pr_comment",
-            description="Post a comment to an Azure DevOps Pull Request",
+            description="Post a comment to an Azure DevOps Pull Request (general or file-specific)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -292,7 +476,7 @@ async def handle_list_tools() -> List[Tool]:
                     },
                     "organization": {
                         "type": "string",
-                        "description": "Azure DevOps organization name"
+                        "description": "Azure DevOps organization name or URL (e.g., 'myorg' or 'https://dev.azure.com/myorg')"
                     },
                     "project": {
                         "type": "string",
@@ -302,20 +486,20 @@ async def handle_list_tools() -> List[Tool]:
                         "type": "string",
                         "description": "Repository name"
                     },
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to the file to comment on"
-                    },
-                    "line": {
-                        "type": "integer",
-                        "description": "Line number to comment on"
-                    },
                     "comment": {
                         "type": "string",
                         "description": "Comment text"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional: Path to the file to comment on (for file-specific comments)"
+                    },
+                    "line_number": {
+                        "type": "integer",
+                        "description": "Optional: Line number to comment on (requires file_path)"
                     }
                 },
-                "required": ["pr_id", "organization", "project", "repository", "file_path", "line", "comment"]
+                "required": ["pr_id", "organization", "project", "repository", "comment"]
             }
         )
     ]
@@ -332,10 +516,8 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
     elif name == "get_pr_details":
         pr_id = arguments["pr_id"]
         organization = arguments["organization"]
-        project = arguments["project"]
-        repository = arguments["repository"]
         
-        success, result = get_pr_details(pr_id, organization, project, repository)
+        success, result = get_pr_details(pr_id, organization)
         if success:
             pr_info = result
             details = f"""## Pull Request Details
@@ -360,12 +542,9 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
             return [TextContent(type="text", text=f"❌ Error: {result}")]
     
     elif name == "get_pr_files":
-        pr_id = arguments["pr_id"]
-        organization = arguments["organization"]
-        project = arguments["project"]
-        repository = arguments["repository"]
+        pr_url = arguments["pr_url"]
         
-        success, result = get_pr_files(pr_id, organization, project, repository)
+        success, result = get_pr_files(pr_url)
         if success:
             changes = result
             files_list = "## Changed Files\n\n"
@@ -396,11 +575,11 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
         organization = arguments["organization"]
         project = arguments["project"]
         repository = arguments["repository"]
-        file_path = arguments["file_path"]
-        line = arguments["line"]
         comment = arguments["comment"]
+        file_path = arguments.get("file_path")
+        line_number = arguments.get("line_number")
         
-        success, message = post_pr_comment(pr_id, organization, project, repository, file_path, line, comment)
+        success, message = post_pr_comment_rest(organization, project, repository, pr_id, comment, file_path, line_number)
         status = "✅" if success else "❌"
         return [TextContent(type="text", text=f"{status} {message}")]
     

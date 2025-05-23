@@ -7,7 +7,7 @@ This workflow enables Cline to perform comprehensive code reviews on Azure DevOp
 - **Comprehensive Analysis**: Reviews code quality, security, performance, documentation, and dependencies
 - **Language-Specific Rules**: Tailored analysis for Go, C#, PowerShell, and Bash
 - **Interactive Approval**: Review and modify comments before posting to ADO
-- **Azure CLI Integration**: Uses `az devops` commands for seamless ADO interaction
+- **Azure DevOps REST API**: Uses official REST API for reliable PR interaction and commenting
 - **Multi-Organization Support**: Works across different ADO organizations and projects
 
 ## Prerequisites
@@ -54,6 +54,20 @@ This workflow enables Cline to perform comprehensive code reviews on Azure DevOp
 ### Cross-Organization Review
 ```
 "Review PR 1234 in different-org/project/repo"
+```
+
+### Comment Posting
+The workflow supports two types of comments:
+
+**General PR Comments** (not tied to specific files):
+```
+"Post a general comment: 'Overall the PR looks good, just a few minor suggestions'"
+```
+
+**File-Specific Comments** (with optional line numbers):
+```
+"Comment on file src/main.go: 'Consider adding error handling here'"
+"Comment on line 25 of src/main.go: 'This function could be optimized'"
 ```
 
 ## Workflow Process
