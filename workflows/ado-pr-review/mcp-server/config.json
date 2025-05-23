@@ -1,0 +1,33 @@
+{
+  "name": "ado-pr-review",
+  "version": "1.0.0",
+  "description": "Azure DevOps Pull Request Review MCP Server",
+  "default_organization": "",
+  "default_project": "",
+  "comment_templates": "../templates/",
+  "rules_directory": "../rules/",
+  "max_comments_per_pr": 25,
+  "severity_levels": ["critical", "high", "medium", "low", "suggestion"],
+  "file_extensions": {
+    "go": [".go"],
+    "go_mod": ["go.mod", "go.sum"],
+    "csharp": [".cs"],
+    "csharp_project": [".csproj", ".sln"],
+    "powershell": [".ps1", ".psm1", ".psd1"],
+    "bash": [".sh"],
+    "docker": ["Dockerfile", "docker-compose.yml", "docker-compose.yaml"],
+    "makefile": ["Makefile", "makefile"],
+    "config": [".yml", ".yaml", ".json", ".xml", ".toml"],
+    "documentation": [".md", ".rst", ".txt"]
+  },
+  "ignore_patterns": [
+    "*.min.js",
+    "*.min.css",
+    "node_modules/",
+    "bin/",
+    "obj/",
+    "vendor/",
+    ".git/",
+    "*.log"
+  ]
+}
