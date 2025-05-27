@@ -1,6 +1,6 @@
 # Cline Config
 
-A comprehensive collection of MCP servers, rules, and workflows for [Cline](https://github.com/clinebot/cline) - enabling powerful automation for code review, development workflows, and more.
+A comprehensive collection of MCP servers and specialized prompts for [Cline](https://github.com/clinebot/cline) - enabling powerful automation for code review, development workflows, and more.
 
 ## 🚀 Quick Start
 
@@ -26,46 +26,60 @@ A comprehensive collection of MCP servers, rules, and workflows for [Cline](http
 
 3. **Configure Cline MCP servers** (see [MCP Configuration](#mcp-configuration) below)
 
-## 📋 Available Workflows
+## 📋 Specialized Review Prompts
 
-### Azure DevOps PR Review
+### Core PR Review Assistant
+**File**: `prompts/pr-review-core.md`
 
-Comprehensive code review automation for Azure DevOps Pull Requests with intelligent analysis and automated commenting.
+Comprehensive code review guidance covering all aspects of software quality, security, and best practices across multiple languages.
 
-**Features:**
-- 🔍 **Multi-language support**: Go, C#, PowerShell, Bash
-- 🛡️ **Security analysis**: Identifies vulnerabilities and best practices
-- ⚡ **Performance insights**: Spots optimization opportunities  
-- 📝 **Documentation checks**: Ensures proper code documentation
-- 🎯 **Targeted commenting**: File-specific comments with line numbers
-- 🔄 **Interactive approval**: Review and modify comments before posting
-
-**Quick Setup:**
-```bash
-# Install Azure CLI and login
-az login
-az extension add --name azure-devops
-
-# Install Python dependencies
-cd mcp-servers/ado-pr-review
-pip install -r requirements.txt
+**Usage:**
+```
+Load prompt: pr-review-core.md
+Review PR https://dev.azure.com/org/project/_git/repo/pullrequest/123
 ```
 
-**Usage Examples:**
+### Go Code Review Specialist  
+**File**: `prompts/pr-review-golang.md`
 
-```
-Review PR https://msazure.visualstudio.com/One/_git/myrepo/pullrequest/12345 using ado-pr-review mcp tool. Please write individual comments for each suggestion for the corresponding files. Make each comment brief, and only comment if there is a minor issue. Include line numbers in comments.
-```
+Deep Go expertise focusing on concurrency, error handling, performance, and Go-specific best practices.
 
+**Usage:**
 ```
-Review PR 1234 in myorg/myproject/myrepo for security issues only
-```
-
-```
-Focus on performance issues in PR https://dev.azure.com/myorg/project/_git/repo/pullrequest/5678
+Load prompt: pr-review-golang.md
+Review PR https://dev.azure.com/org/project/_git/repo/pullrequest/123 focusing on Go best practices
 ```
 
-See the [ADO PR Review README](workflows/ado-pr-review/README.md) for detailed workflow documentation.
+### Security-Focused Review
+**File**: `prompts/pr-review-security.md`
+
+Specialized security analysis identifying vulnerabilities, authentication issues, injection attacks, and cryptographic weaknesses.
+
+**Usage:**
+```
+Load prompt: pr-review-security.md
+Review PR https://dev.azure.com/org/project/_git/repo/pullrequest/123 for security vulnerabilities
+```
+
+### Performance Optimization Review
+**File**: `prompts/pr-review-performance.md`
+
+Expert performance analysis covering algorithmic complexity, memory efficiency, database optimization, and scalability issues.
+
+**Usage:**
+```
+Load prompt: pr-review-performance.md
+Review PR https://dev.azure.com/org/project/_git/repo/pullrequest/123 for performance issues
+```
+
+## ✨ Key Features
+
+- 🎯 **Specialized Focus**: Each prompt targets specific review aspects (security, performance, language-specific)
+- 🛠️ **MCP Integration**: Seamless integration with Azure DevOps via MCP server tools
+- 🔍 **Multi-Language Support**: Go, C#, PowerShell, Bash with language-specific best practices
+- 📊 **Severity Levels**: Clear prioritization (🔴 Critical, 🟠 High, 🟡 Medium, 🔵 Low, 💡 Suggestion)
+- 📝 **Structured Comments**: Consistent, professional feedback with examples and references
+- 🚀 **Ready-to-Use**: No complex workflow setup - just load a prompt and review PRs
 
 ## 🛠️ MCP Servers
 
@@ -101,81 +115,44 @@ Add the following to your Cline MCP configuration:
 }
 ```
 
-### Workflow Configuration
-
-Update `workflows/ado-pr-review/config.json` with your workflow defaults:
-
-```json
-{
-  "default_organization": "your-org",
-  "default_project": "your-project",
-  "comment_templates": "templates/",
-  "rules_directory": "rules/",
-  "max_comments_per_pr": 25,
-  "severity_levels": ["critical", "high", "medium", "low", "suggestion"]
-}
-```
-
-## 📖 Rules and Templates
-
-### Language-Specific Rules
-
-The repository includes comprehensive review rules for:
-
-- **[Go](workflows/ado-pr-review/rules/languages/golang.md)**: Concurrency, error handling, performance
-- **[C#](workflows/ado-pr-review/rules/languages/csharp.md)**: .NET best practices, async/await, LINQ
-- **[PowerShell](workflows/ado-pr-review/rules/languages/powershell.md)**: Security, cmdlet usage, modules
-- **[Bash](workflows/ado-pr-review/rules/languages/bash.md)**: Security, portability, error handling
-
-### Core Review Principles
-
-- **[Security Review](workflows/ado-pr-review/rules/security-review.md)**: Common vulnerabilities and secure coding
-- **[Dependencies](workflows/ado-pr-review/rules/dependencies.md)**: Package management and version control
-- **[Core Principles](workflows/ado-pr-review/rules/core-principles.md)**: General code quality guidelines
-
-### Comment Templates
-
-Pre-built templates for consistent feedback:
-
-- **[Security Issues](workflows/ado-pr-review/templates/security-issue.md)**
-- **[Performance Suggestions](workflows/ado-pr-review/templates/performance-suggestion.md)**
-- **[Code Quality](workflows/ado-pr-review/templates/code-quality.md)**
-- **[Documentation](workflows/ado-pr-review/templates/documentation-improvement.md)**
-
 ## 💡 Example Usage with Cline
 
 ### Comprehensive PR Review
 
 ```
-Review PR https://msazure.visualstudio.com/One/_git/azlocal-overlay/pullrequest/12479934 using ado-pr-review mcp tool. Please write individual comments for each suggestion for the corresponding files. Make each comment brief, and only comment if there is a minor issue. Include line numbers in comments.
+Load prompt: pr-review-core.md
+Review PR https://dev.azure.com/org/project/_git/repo/pullrequest/123
+Write individual comments for each suggestion for the corresponding files.
+Make each comment brief, and only comment if there is a minor issue.
+Include line numbers in comments.
 ```
 
 This instruction will:
 1. ✅ Authenticate with Azure DevOps
 2. 📥 Fetch PR details and changed files
-3. 🔍 Analyze each file using language-specific rules
+3. 🔍 Analyze each file using comprehensive review criteria
 4. 📝 Generate targeted comments with line numbers
 5. 👀 Present findings for your review
 6. 💬 Post approved comments to the PR
 
 ### Focused Reviews
 
+**Security Review:**
 ```
+Load prompt: pr-review-security.md
 Review PR 1234 for security vulnerabilities only
 ```
 
+**Performance Review:**
 ```
+Load prompt: pr-review-performance.md
 Check PR https://dev.azure.com/myorg/project/_git/repo/pullrequest/5678 for performance issues
 ```
 
+**Go-Specific Review:**
 ```
-Analyze documentation quality in PR 9999
-```
-
-### Batch Operations
-
-```
-Review PRs 1001, 1002, 1003 in myorg/myproject/myrepo
+Load prompt: pr-review-golang.md
+Analyze Go code quality in PR 9999
 ```
 
 ## 🗂️ Repository Structure
@@ -183,94 +160,79 @@ Review PRs 1001, 1002, 1003 in myorg/myproject/myrepo
 ```
 cline-config/
 ├── README.md                              # This file
-├── mcp-servers/                           # Standalone MCP servers
-│   └── ado-pr-review/                     # Azure DevOps integration server
-│       ├── README.md                      # MCP server documentation
-│       ├── server.py                      # Main server implementation
-│       └── requirements.txt               # Python dependencies
-└── workflows/                             # Cline workflow configurations
-    └── ado-pr-review/                     # Azure DevOps PR Review workflow
-        ├── README.md                      # Workflow usage guide
-        ├── config.json                    # Workflow configuration
-        ├── rules/                         # Review rules and guidelines
-        │   ├── core-principles.md         # General principles
-        │   ├── security-review.md         # Security guidelines
-        │   ├── dependencies.md            # Dependency management
-        │   └── languages/                 # Language-specific rules
-        │       ├── golang.md              # Go best practices
-        │       ├── csharp.md              # C# guidelines
-        │       ├── powershell.md          # PowerShell standards
-        │       └── bash.md                # Bash scripting rules
-        └── templates/                     # Comment templates
-            ├── security-issue.md          # Security findings
-            ├── performance-suggestion.md  # Performance improvements
-            ├── code-quality.md            # Code quality issues
-            ├── documentation-improvement.md # Documentation gaps
-            └── suggestion.md              # General suggestions
+├── prompts/                               # Specialized Cline prompts
+│   ├── pr-review-core.md                  # Comprehensive PR review assistant
+│   ├── pr-review-golang.md                # Go-specific code review specialist
+│   ├── pr-review-security.md              # Security-focused review expert
+│   └── pr-review-performance.md           # Performance optimization specialist
+└── mcp-servers/                           # Standalone MCP servers
+    └── ado-pr-review/                     # Azure DevOps integration server
+        ├── README.md                      # MCP server documentation
+        ├── server.py                      # Main server implementation
+        └── requirements.txt               # Python dependencies
 ```
 
 ## 🛠️ Architecture
 
 ### Separation of Concerns
 
-- **MCP Servers** (`mcp-servers/`): Pure technical implementations providing tools and APIs
-- **Workflows** (`workflows/`): Cline configurations, rules, and templates for specific use cases
+- **Prompts** (`prompts/`): Specialized review guidance for different focus areas
+- **MCP Servers** (`mcp-servers/`): Technical implementations providing tools and APIs
 
 ### How It Works
 
-1. **MCP Server**: Provides low-level tools (API calls, data retrieval, comment posting)
-2. **Workflow Rules**: Guide Cline on what to look for in code reviews
-3. **Templates**: Format findings into consistent, professional comments
-4. **Configuration**: Customizes behavior for your organization
+1. **Load Prompt**: Choose a specialized prompt based on review focus
+2. **MCP Server**: Provides low-level tools (API calls, data retrieval, comment posting)
+3. **Cline Analysis**: Uses prompt guidance to analyze code and generate findings
+4. **Structured Output**: Formats findings into consistent, professional comments
 
 ## 🛠️ Customization
 
-### Adding Custom Rules
+### Creating Custom Prompts
 
-1. **Create language-specific rules:**
+1. **Create new prompt file:**
    ```bash
-   # Add new language support
-   touch workflows/ado-pr-review/rules/languages/python.md
+   touch prompts/pr-review-python.md
    ```
 
-2. **Update file extensions in config:**
-   ```json
-   {
-     "file_extensions": {
-       "python": [".py", ".pyw"]
-     }
-   }
+2. **Follow the prompt structure:**
+   ```markdown
+   # Python Code Review Specialist
+   
+   You are a Python expert specializing in...
+   
+   ## Review Process
+   ### 1. Authentication & Setup
+   - Use `check_az_login` tool...
+   
+   ## Review Framework
+   ### 🔴 **CRITICAL** Issues
+   ...
    ```
 
-### Custom Comment Templates
+### Extending Existing Prompts
 
-Create new templates in `workflows/ado-pr-review/templates/`:
+- **Add language-specific guidance** to existing prompts
+- **Include new security patterns** in the security prompt
+- **Add performance optimizations** for specific frameworks
+- **Create industry-specific variants** (web, mobile, embedded)
 
-```markdown
-# Custom Template: API Design Review
-
-## Issue Category: API Design
-
-**Severity:** Medium
-
-**Description:**
-{description}
-
-**Suggestion:**
-{suggestion}
-
-**Best Practice Reference:**
-{reference_link}
-```
-
-### Organization-Specific Rules
+### Organization-Specific Customization
 
 1. **Fork this repository**
-2. **Customize rules** in `workflows/ado-pr-review/rules/`
-3. **Update templates** for your organization's standards
-4. **Configure default settings** in `workflows/ado-pr-review/config.json`
+2. **Customize prompts** with your organization's standards
+3. **Add company-specific security guidelines**
+4. **Include internal best practices and coding standards**
 
 ## 🤝 Contributing
+
+### Adding New Prompts
+
+1. **Identify the review focus** (language, domain, technology)
+2. **Create comprehensive prompt** following existing patterns
+3. **Include practical examples** and anti-patterns
+4. **Add structured comment templates**
+5. **Document usage instructions**
 
 ### Adding New MCP Servers
 
@@ -282,36 +244,50 @@ Create new templates in `workflows/ado-pr-review/templates/`:
 2. **Implement MCP server** following the standard MCP protocol
 3. **Add documentation** and requirements
 
-### Adding New Workflows
+### Enhancing Existing Components
 
-1. **Create workflow directory:**
-   ```bash
-   mkdir workflows/my-new-workflow
-   ```
-
-2. **Follow the structure:**
-   ```
-   workflows/my-new-workflow/
-   ├── README.md              # Workflow documentation
-   ├── config.json            # Workflow configuration
-   ├── rules/                 # Review rules
-   └── templates/             # Comment templates
-   ```
-
-### Extending Existing Workflows
-
-- **Add new rules** in appropriate `rules/` directories
-- **Create new templates** for consistent messaging
-- **Update language support** by extending file type mappings
-- **Enhance server capabilities** by adding new tools
+- **Expand language coverage** in existing prompts
+- **Add new code analysis patterns**
+- **Improve comment templates and formatting**
+- **Enhance MCP server capabilities** with new tools
 
 ### Submitting Changes
 
 1. **Fork the repository**
 2. **Create a feature branch**
 3. **Make your changes**
-4. **Test thoroughly**
+4. **Test thoroughly with real PRs**
 5. **Submit a pull request**
+
+## 📚 Prompt Contents Overview
+
+### pr-review-core.md
+- **Multi-language support**: Go, C#, PowerShell, Bash
+- **Security analysis**: Input validation, authentication, cryptography
+- **Performance review**: Algorithmic complexity, memory management
+- **Code quality**: Architecture, maintainability, testing
+- **Documentation**: API docs, code comments, examples
+
+### pr-review-golang.md
+- **Concurrency**: Goroutines, channels, context cancellation
+- **Error handling**: Explicit error management, wrapping
+- **Performance**: Memory allocation, string building, slice operations
+- **Package design**: Interfaces, naming conventions, module structure
+- **Testing**: Table-driven tests, benchmarks, coverage
+
+### pr-review-security.md
+- **Vulnerability detection**: SQL injection, XSS, CSRF
+- **Authentication**: JWT, session management, authorization
+- **Cryptography**: Strong algorithms, key management, random generation
+- **Input validation**: Sanitization, boundary checks, file uploads
+- **Information disclosure**: Error messages, logging, debug info
+
+### pr-review-performance.md
+- **Algorithmic analysis**: Time/space complexity, optimization opportunities
+- **Database performance**: Query optimization, N+1 problems, indexing
+- **Memory management**: Leak detection, resource cleanup, caching
+- **Concurrency**: Async patterns, blocking operations, parallelization
+- **Profiling guidance**: Benchmarking, monitoring, measurement
 
 ## 📚 Additional Resources
 
@@ -325,4 +301,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**🎯 Ready to supercharge your code reviews?** Start with the Azure DevOps PR Review workflow and customize it for your team's needs!
+**🎯 Ready to supercharge your code reviews?** Choose a specialized prompt, load it in Cline, and start reviewing PRs with expert-level analysis!
