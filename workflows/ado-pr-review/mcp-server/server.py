@@ -315,6 +315,54 @@ def get_file_content(file_path: str, organization: str, project: str, repository
     except Exception as e:
         return False, f"Failed to process file content: {str(e)}"
 
+def debug_pr_iteration_info(organization: str, project: str, repository: str, pr_id: str) -> tuple[bool, str]:
+    """Debug function to get PR iteration information for troubleshooting."""
+    success, token = get_access_token()
+    if not success:
+        return False, f"Failed to get access token: {token}"
+    
+    # Clean organization name if it contains URL
+    if organization.startswith('https://'):
+        org_name = organization.split('/')[-1]
+        org_name = org_name.replace('.visualstudio.com', '')
+    else:
+        org_name = organization
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Get PR iterations
+        iterations_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations?api-version=7.1"
+        iterations_response = requests.get(iterations_url, headers=headers)
+        iterations_response.raise_for_status()
+        iterations_data = iterations_response.json()
+        
+        debug_info = f"Iterations URL: {iterations_url}\n\n"
+        debug_info += "PR Iterations:\n"
+        debug_info += json.dumps(iterations_data, indent=2)
+        
+        if iterations_data.get("value"):
+            latest_iteration = iterations_data["value"][-1]
+            latest_iteration_id = latest_iteration["id"]
+            
+            # Get changes for latest iteration
+            changes_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations/{latest_iteration_id}/changes?api-version=7.1"
+            changes_response = requests.get(changes_url, headers=headers)
+            changes_response.raise_for_status()
+            changes_data = changes_response.json()
+            
+            debug_info += f"\n\nChanges URL: {changes_url}\n\n"
+            debug_info += "Latest Iteration Changes:\n"
+            debug_info += json.dumps(changes_data, indent=2)
+        
+        return True, debug_info
+        
+    except requests.RequestException as e:
+        return False, f"Failed to get debug info: {str(e)}"
+
 def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id: str, 
                         comment: str, file_path: Optional[str] = None, 
                         line_number: Optional[int] = None) -> tuple[bool, str]:
@@ -348,9 +396,6 @@ def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id
     else:
         org_name = organization
     
-    # Build API URL
-    api_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/threads?api-version=7.1"
-    
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -368,24 +413,76 @@ def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id
         "status": 1  # Active status
     }
     
-    # Add thread context for file-specific comments
+    # For file-specific comments, we need to find the file in the latest iteration
     if file_path:
-        thread_context = {
-            "filePath": file_path
-        }
-        
-        # Add line-specific context if line number provided
-        if line_number is not None:
-            thread_context["rightFileStart"] = {
-                "line": line_number,
-                "offset": 1
+        try:
+            # Get PR iterations to find the latest one
+            iterations_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations?api-version=7.1"
+            iterations_response = requests.get(iterations_url, headers=headers)
+            iterations_response.raise_for_status()
+            iterations_data = iterations_response.json()
+            
+            if not iterations_data.get("value"):
+                return False, "No iterations found in PR"
+            
+            # Get the latest iteration
+            latest_iteration = iterations_data["value"][-1]
+            latest_iteration_id = latest_iteration["id"]
+            
+            # Get changes for the latest iteration to verify file exists
+            changes_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations/{latest_iteration_id}/changes?api-version=7.1"
+            changes_response = requests.get(changes_url, headers=headers)
+            changes_response.raise_for_status()
+            changes_data = changes_response.json()
+            
+            # Find the specific file in the changes
+            file_found = False
+            change_item = None
+            
+            for change in changes_data.get("changeEntries", []):
+                item = change.get("item", {})
+                if item.get("path") == file_path:
+                    file_found = True
+                    change_item = change
+                    break
+                # Also check originalPath for renamed files
+                elif change.get("originalPath") == file_path:
+                    file_found = True
+                    change_item = change
+                    break
+            
+            if not file_found:
+                return False, f"File '{file_path}' not found in the latest PR iteration. Please verify the file path exists in the current PR changes."
+            
+            # Build thread context using the exact iteration and change information
+            thread_context = {
+                "filePath": file_path,
+                "iterationContext": {
+                    "firstComparingIteration": latest_iteration_id,
+                    "secondComparingIteration": latest_iteration_id
+                }
             }
-            thread_context["rightFileEnd"] = {
-                "line": line_number,
-                "offset": 1
-            }
-        
-        payload["threadContext"] = thread_context
+            
+            # Add line positioning if specified
+            if line_number is not None:
+                thread_context["rightFileStart"] = {
+                    "line": line_number,
+                    "offset": 1
+                }
+                thread_context["rightFileEnd"] = {
+                    "line": line_number,
+                    "offset": 1
+                }
+            
+            payload["threadContext"] = thread_context
+            
+        except requests.RequestException as e:
+            return False, f"Failed to get PR iteration info: {str(e)}"
+        except Exception as e:
+            return False, f"Error processing PR iteration data: {str(e)}"
+    
+    # Build API URL and post the comment
+    api_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/threads?api-version=7.1"
     
     try:
         response = requests.post(api_url, headers=headers, json=payload)
@@ -523,6 +620,32 @@ async def handle_list_tools() -> List[Tool]:
                 },
                 "required": ["pr_id", "organization", "project", "repository", "comment"]
             }
+        ),
+        Tool(
+            name="debug_pr_iteration_info",
+            description="Debug tool to get PR iteration information for troubleshooting comment posting issues",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pr_id": {
+                        "type": "string",
+                        "description": "Pull Request ID"
+                    },
+                    "organization": {
+                        "type": "string",
+                        "description": "Azure DevOps organization name or URL"
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project name"
+                    },
+                    "repository": {
+                        "type": "string",
+                        "description": "Repository name"
+                    }
+                },
+                "required": ["pr_id", "organization", "project", "repository"]
+            }
         )
     ]
 
@@ -604,6 +727,18 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
         success, message = post_pr_comment_rest(organization, project, repository, pr_id, comment, file_path, line_number)
         status = "✅" if success else "❌"
         return [TextContent(type="text", text=f"{status} {message}")]
+    
+    elif name == "debug_pr_iteration_info":
+        pr_id = arguments["pr_id"]
+        organization = arguments["organization"]
+        project = arguments["project"]
+        repository = arguments["repository"]
+        
+        success, debug_info = debug_pr_iteration_info(organization, project, repository, pr_id)
+        if success:
+            return [TextContent(type="text", text=f"## PR Debug Information\n\n```json\n{debug_info}\n```")]
+        else:
+            return [TextContent(type="text", text=f"❌ Debug Error: {debug_info}")]
     
     else:
         return [TextContent(type="text", text=f"❌ Unknown tool: {name}")]
