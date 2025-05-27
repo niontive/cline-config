@@ -20,7 +20,7 @@ A comprehensive collection of MCP servers, rules, and workflows for [Cline](http
 
 2. **Install Python dependencies:**
    ```bash
-   cd workflows/ado-pr-review/mcp-server
+   cd mcp-servers/ado-pr-review
    pip install -r requirements.txt
    ```
 
@@ -47,7 +47,7 @@ az login
 az extension add --name azure-devops
 
 # Install Python dependencies
-cd workflows/ado-pr-review/mcp-server
+cd mcp-servers/ado-pr-review
 pip install -r requirements.txt
 ```
 
@@ -65,7 +65,23 @@ Review PR 1234 in myorg/myproject/myrepo for security issues only
 Focus on performance issues in PR https://dev.azure.com/myorg/project/_git/repo/pullrequest/5678
 ```
 
-See the [ADO PR Review README](workflows/ado-pr-review/README.md) for detailed documentation.
+See the [ADO PR Review README](workflows/ado-pr-review/README.md) for detailed workflow documentation.
+
+## 🛠️ MCP Servers
+
+### Azure DevOps PR Review Server
+
+Located at `mcp-servers/ado-pr-review/` - provides Azure DevOps REST API integration tools.
+
+**Available Tools:**
+- `check_az_login` - Verify Azure CLI authentication
+- `get_pr_details` - Fetch PR information
+- `get_pr_files` - List changed files in a PR
+- `get_file_content` - Retrieve file content from repository
+- `post_pr_comment` - Post comments to PRs (general or file-specific)
+- `debug_pr_iteration_info` - Debug PR iteration data
+
+See the [MCP Server README](mcp-servers/ado-pr-review/README.md) for detailed technical documentation.
 
 ## ⚙️ MCP Configuration
 
@@ -78,21 +94,23 @@ Add the following to your Cline MCP configuration:
   "mcpServers": {
     "ado-pr-review": {
       "command": "python",
-      "args": ["/path/to/cline-config/workflows/ado-pr-review/mcp-server/server.py"],
+      "args": ["/path/to/cline-config/mcp-servers/ado-pr-review/server.py"],
       "env": {}
     }
   }
 }
 ```
 
-### Server Configuration
+### Workflow Configuration
 
-Update `workflows/ado-pr-review/mcp-server/config.json` with your defaults:
+Update `workflows/ado-pr-review/config.json` with your workflow defaults:
 
 ```json
 {
   "default_organization": "your-org",
   "default_project": "your-project",
+  "comment_templates": "templates/",
+  "rules_directory": "rules/",
   "max_comments_per_pr": 25,
   "severity_levels": ["critical", "high", "medium", "low", "suggestion"]
 }
@@ -165,13 +183,15 @@ Review PRs 1001, 1002, 1003 in myorg/myproject/myrepo
 ```
 cline-config/
 ├── README.md                              # This file
-└── workflows/                             # Workflow implementations
-    └── ado-pr-review/                     # Azure DevOps PR Review
-        ├── README.md                      # Detailed workflow documentation
-        ├── mcp-server/                    # MCP server implementation
-        │   ├── server.py                  # Main server code
-        │   ├── config.json                # Server configuration
-        │   └── requirements.txt           # Python dependencies
+├── mcp-servers/                           # Standalone MCP servers
+│   └── ado-pr-review/                     # Azure DevOps integration server
+│       ├── README.md                      # MCP server documentation
+│       ├── server.py                      # Main server implementation
+│       └── requirements.txt               # Python dependencies
+└── workflows/                             # Cline workflow configurations
+    └── ado-pr-review/                     # Azure DevOps PR Review workflow
+        ├── README.md                      # Workflow usage guide
+        ├── config.json                    # Workflow configuration
         ├── rules/                         # Review rules and guidelines
         │   ├── core-principles.md         # General principles
         │   ├── security-review.md         # Security guidelines
@@ -188,6 +208,20 @@ cline-config/
             ├── documentation-improvement.md # Documentation gaps
             └── suggestion.md              # General suggestions
 ```
+
+## 🛠️ Architecture
+
+### Separation of Concerns
+
+- **MCP Servers** (`mcp-servers/`): Pure technical implementations providing tools and APIs
+- **Workflows** (`workflows/`): Cline configurations, rules, and templates for specific use cases
+
+### How It Works
+
+1. **MCP Server**: Provides low-level tools (API calls, data retrieval, comment posting)
+2. **Workflow Rules**: Guide Cline on what to look for in code reviews
+3. **Templates**: Format findings into consistent, professional comments
+4. **Configuration**: Customizes behavior for your organization
 
 ## 🛠️ Customization
 
@@ -234,9 +268,19 @@ Create new templates in `workflows/ado-pr-review/templates/`:
 1. **Fork this repository**
 2. **Customize rules** in `workflows/ado-pr-review/rules/`
 3. **Update templates** for your organization's standards
-4. **Configure default settings** in `config.json`
+4. **Configure default settings** in `workflows/ado-pr-review/config.json`
 
 ## 🤝 Contributing
+
+### Adding New MCP Servers
+
+1. **Create server directory:**
+   ```bash
+   mkdir mcp-servers/my-new-server
+   ```
+
+2. **Implement MCP server** following the standard MCP protocol
+3. **Add documentation** and requirements
 
 ### Adding New Workflows
 
@@ -249,11 +293,10 @@ Create new templates in `workflows/ado-pr-review/templates/`:
    ```
    workflows/my-new-workflow/
    ├── README.md              # Workflow documentation
-   ├── mcp-server/            # MCP server implementation
-   └── config/                # Configuration files
+   ├── config.json            # Workflow configuration
+   ├── rules/                 # Review rules
+   └── templates/             # Comment templates
    ```
-
-3. **Implement MCP server** following the ADO PR Review example
 
 ### Extending Existing Workflows
 

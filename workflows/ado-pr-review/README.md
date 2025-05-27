@@ -24,17 +24,13 @@ This workflow enables Cline to perform comprehensive code reviews on Azure DevOp
    az extension add --name azure-devops
    ```
 
-2. **Python Dependencies**: Install MCP server requirements
-   ```bash
-   cd workflows/ado-pr-review/mcp-server
-   pip install -r requirements.txt
-   ```
+2. **MCP Server**: Install the ADO PR Review MCP server (see `../../mcp-servers/ado-pr-review/README.md`)
 
 3. **Cline Configuration**: Add the MCP server to your Cline config
 
 ## Setup
 
-1. **Configure MCP Server**: Update `mcp-server/config.json` with your default ADO settings
+1. **Configure Workflow**: Update `config.json` with your default ADO settings
 2. **Test Authentication**: Run `az account show` to verify login status
 3. **Set Default Organization**: Configure your primary ADO organization
 
@@ -98,8 +94,8 @@ The workflow supports two types of comments:
 
 ## Configuration
 
-### MCP Server Settings
-Edit `mcp-server/config.json`:
+### Workflow Settings
+Edit `config.json`:
 ```json
 {
   "default_organization": "your-org",
@@ -130,3 +126,24 @@ Modify templates in `templates/` directory to customize comment formatting.
 
 ### Rule Customization
 Add organization-specific rules by creating new files in `rules/languages/` or `rules/`.
+
+## File Structure
+
+```
+workflows/ado-pr-review/
+├── README.md          # This file - workflow usage guide
+├── config.json        # Workflow configuration
+├── rules/             # Code review rules for Cline
+│   ├── core-principles.md
+│   ├── dependencies.md
+│   ├── security-review.md
+│   └── languages/     # Language-specific rules
+└── templates/         # Comment templates
+    ├── code-quality.md
+    ├── documentation-improvement.md
+    ├── performance-suggestion.md
+    ├── security-issue.md
+    └── suggestion.md
+```
+
+The MCP server is located separately at `../../mcp-servers/ado-pr-review/`.

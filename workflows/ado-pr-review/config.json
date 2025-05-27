@@ -4,8 +4,8 @@
   "description": "Azure DevOps Pull Request Review MCP Server",
   "default_organization": "",
   "default_project": "",
-  "comment_templates": "../templates/",
-  "rules_directory": "../rules/",
+  "comment_templates": "templates/",
+  "rules_directory": "rules/",
   "max_comments_per_pr": 25,
   "severity_levels": ["critical", "high", "medium", "low", "suggestion"],
   "file_extensions": {

@@ -29,10 +29,6 @@ from mcp.types import (
 )
 from pydantic import BaseModel, Field
 
-# Load configuration
-config_path = Path(__file__).parent / "config.json"
-with open(config_path, 'r') as f:
-    CONFIG = json.load(f)
 
 class PRInfo(BaseModel):
     id: int
