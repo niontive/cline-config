@@ -12,6 +12,7 @@ import os
 import requests
 import base64
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from mcp.server import Server
@@ -258,8 +259,20 @@ def get_file_content(file_path: str, organization: str, project: str, repository
     # Clean up repository name
     clean_repo = repository.replace('_git/', '').replace('_git', '')
     
+    # Clean up commit_id - remove any trailing backslashes or special characters
+    clean_commit_id = commit_id.rstrip('\\').strip()
+    
+    # Properly encode the file path for URL
+    encoded_path = urllib.parse.quote(file_path, safe='')
+    
     # Azure DevOps REST API endpoint for file content
-    url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{clean_repo}/items?path={file_path}&version={commit_id}&api-version=7.0"
+    # Use proper URL construction with encoded parameters
+    base_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{clean_repo}/items"
+    params = {
+        'path': file_path,
+        'version': clean_commit_id,
+        'api-version': '7.0'
+    }
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -267,7 +280,15 @@ def get_file_content(file_path: str, organization: str, project: str, repository
     }
     
     try:
-        response = requests.get(url, headers=headers)
+        # Use requests with params to properly encode URL parameters
+        response = requests.get(base_url, headers=headers, params=params)
+        
+        # Log the actual URL for debugging
+        actual_url = response.url
+        
+        if response.status_code == 404:
+            return False, f"File not found: {file_path}. URL attempted: {actual_url}"
+        
         response.raise_for_status()
         
         # Check if content is base64 encoded
@@ -289,7 +310,8 @@ def get_file_content(file_path: str, organization: str, project: str, repository
             return True, response.text
             
     except requests.RequestException as e:
-        return False, f"Failed to get file content: {str(e)}"
+        # Include the attempted URL in error message for debugging
+        return False, f"Failed to get file content: {str(e)}. URL attempted: {response.url if 'response' in locals() else 'URL not constructed'}"
     except Exception as e:
         return False, f"Failed to process file content: {str(e)}"
 
