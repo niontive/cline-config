@@ -20,7 +20,7 @@ A comprehensive collection of MCP servers and specialized prompts for [Cline](ht
 
 2. **Install Python dependencies:**
    ```bash
-   cd mcp-servers/ado-pr-review
+   cd mcp-servers/ado-pr
    pip install -r requirements.txt
    ```
 
@@ -83,19 +83,19 @@ Review PR https://dev.azure.com/org/project/_git/repo/pullrequest/123 for perfor
 
 ## 🛠️ MCP Servers
 
-### Azure DevOps PR Review Server
+### Azure DevOps PR Server
 
-Located at `mcp-servers/ado-pr-review/` - provides Azure DevOps REST API integration tools.
+Located at `mcp-servers/ado-pr/` - provides Azure DevOps REST API integration tools for creating and reviewing Pull Requests.
 
 **Available Tools:**
 - `check_az_login` - Verify Azure CLI authentication
-- `get_pr_details` - Fetch PR information
+- `create_pr` - Create new Pull Requests with work item linking
+- `get_pr_info` - Fetch comprehensive PR information
 - `get_pr_files` - List changed files in a PR
 - `get_file_content` - Retrieve file content from repository
 - `post_pr_comment` - Post comments to PRs (general or file-specific)
-- `debug_pr_iteration_info` - Debug PR iteration data
 
-See the [MCP Server README](mcp-servers/ado-pr-review/README.md) for detailed technical documentation.
+See the [MCP Server README](mcp-servers/ado-pr/README.md) for detailed technical documentation.
 
 ## ⚙️ MCP Configuration
 
@@ -106,9 +106,9 @@ Add the following to your Cline MCP configuration:
 ```json
 {
   "mcpServers": {
-    "ado-pr-review": {
+    "ado-pr": {
       "command": "python",
-      "args": ["/path/to/cline-config/mcp-servers/ado-pr-review/server.py"],
+      "args": ["/path/to/cline-config/mcp-servers/ado-pr/server.py"],
       "env": {}
     }
   }
@@ -135,6 +135,23 @@ This instruction will:
 5. 👀 Present findings for your review
 6. 💬 Post approved comments to the PR
 
+### Creating Pull Requests
+
+**Simple PR Creation:**
+```
+Create PR from feature/login-fix in myorg/project/repo with title "Fix login validation bug"
+```
+
+**PR with Work Items:**
+```
+Create PR from feature/dashboard to main in myorg/project/repo with title "New user dashboard" and work items 1234,5678
+```
+
+**Draft PR:**
+```
+Create draft PR from feature/wip-feature in myorg/project/repo with title "Work in progress - new API"
+```
+
 ### Focused Reviews
 
 **Security Review:**
@@ -155,6 +172,16 @@ Load prompt: pr-review-golang.md
 Analyze Go code quality in PR 9999
 ```
 
+### Complete Workflow
+
+**Create and Review:**
+```
+1. Create PR from feature/new-feature with title "Add new authentication system" and work items 1234
+2. Load prompt: pr-review-security.md
+3. Review the newly created PR for security issues
+4. Post comments with recommendations
+```
+
 ## 🗂️ Repository Structure
 
 ```
@@ -166,7 +193,7 @@ cline-config/
 │   ├── pr-review-security.md              # Security-focused review expert
 │   └── pr-review-performance.md           # Performance optimization specialist
 └── mcp-servers/                           # Standalone MCP servers
-    └── ado-pr-review/                     # Azure DevOps integration server
+    └── ado-pr/                            # Azure DevOps integration server
         ├── README.md                      # MCP server documentation
         ├── server.py                      # Main server implementation
         └── requirements.txt               # Python dependencies

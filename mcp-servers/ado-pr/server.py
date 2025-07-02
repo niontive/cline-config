@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Azure DevOps Pull Request Review MCP Server
+Azure DevOps Pull Request MCP Server
 
-Provides tools for reviewing Azure DevOps Pull Requests through Cline.
+Provides tools for creating and reviewing Azure DevOps Pull Requests through Cline.
 """
 
 import json
@@ -28,20 +28,6 @@ from mcp.types import (
     ServerCapabilities
 )
 from pydantic import BaseModel, Field
-
-
-class PRInfo(BaseModel):
-    id: int
-    title: str
-    description: str
-    source_branch: str
-    target_branch: str
-    author: str
-    status: str
-    created_date: str
-    repository: str
-    organization: str
-    project: str
 
 class FileChange(BaseModel):
     path: str
@@ -135,12 +121,217 @@ def check_az_login() -> tuple[bool, str]:
     else:
         return False, f"Not logged in: {stderr}"
 
-def get_pr_details(pr_id: str, organization: str) -> tuple[bool, Union[PRInfo, str]]:
-    """Get PR details from Azure DevOps."""
+def clean_organization_name(organization: str) -> str:
+    """Clean organization name from URL format."""
+    if organization.startswith('https://'):
+        org_name = organization.split('/')[-1]
+        org_name = org_name.replace('.visualstudio.com', '')
+    else:
+        org_name = organization
+    return org_name
+
+def validate_branch_exists(organization: str, project: str, repository: str, branch_name: str) -> tuple[bool, str]:
+    """Validate that a branch exists in the repository."""
+    success, token = get_access_token()
+    if not success:
+        return False, f"Failed to get access token: {token}"
+    
+    org_name = clean_organization_name(organization)
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Get branch information
+        api_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/refs?filter=heads/{branch_name}&api-version=7.1"
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()
+        
+        data = response.json()
+        if not data.get("value"):
+            return False, f"Branch '{branch_name}' not found in repository"
+        
+        return True, f"Branch '{branch_name}' exists"
+        
+    except requests.RequestException as e:
+        return False, f"Failed to validate branch: {str(e)}"
+
+def resolve_reviewers(organization: str, project: str, reviewers: List[str]) -> tuple[bool, Union[List[Dict], str]]:
+    """Resolve reviewer emails/usernames to Azure DevOps user IDs."""
+    if not reviewers:
+        return True, []
+    
+    success, token = get_access_token()
+    if not success:
+        return False, f"Failed to get access token: {token}"
+    
+    org_name = clean_organization_name(organization)
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    resolved_reviewers = []
+    
+    for reviewer in reviewers:
+        try:
+            # Try to find user by email or display name
+            # First try by email
+            api_url = f"https://dev.azure.com/{org_name}/_apis/graph/users?subjectDescriptor={reviewer}&api-version=7.1-preview.1"
+            response = requests.get(api_url, headers=headers)
+            
+            if response.status_code == 404:
+                # If not found by descriptor, try searching by display name or email
+                search_url = f"https://dev.azure.com/{org_name}/_apis/identities?searchFilter=General&filterValue={reviewer}&api-version=7.1"
+                search_response = requests.get(search_url, headers=headers)
+                
+                if search_response.status_code == 200:
+                    search_data = search_response.json()
+                    if search_data.get("value"):
+                        user_id = search_data["value"][0]["id"]
+                        resolved_reviewers.append({"id": user_id})
+                    else:
+                        # If user not found, add as display name (Azure DevOps will handle resolution)
+                        resolved_reviewers.append({"displayName": reviewer})
+                else:
+                    resolved_reviewers.append({"displayName": reviewer})
+            else:
+                response.raise_for_status()
+                user_data = response.json()
+                resolved_reviewers.append({"id": user_data["principalName"]})
+                
+        except requests.RequestException:
+            # If resolution fails, add as display name
+            resolved_reviewers.append({"displayName": reviewer})
+    
+    return True, resolved_reviewers
+
+def create_pull_request(organization: str, project: str, repository: str, source_branch: str, 
+                       target_branch: str, title: str, description: Optional[str] = None,
+                       reviewers: Optional[List[str]] = None, work_items: Optional[List[str]] = None,
+                       auto_complete: bool = False, draft: bool = False) -> tuple[bool, str]:
+    """Create a new Pull Request in Azure DevOps."""
+    
+    # Get access token
+    success, token = get_access_token()
+    if not success:
+        return False, f"Failed to get access token: {token}"
+    
+    org_name = clean_organization_name(organization)
+    
+    # Validate source branch exists
+    success, message = validate_branch_exists(organization, project, repository, source_branch)
+    if not success:
+        return False, f"Source branch validation failed: {message}"
+    
+    # Validate target branch exists
+    success, message = validate_branch_exists(organization, project, repository, target_branch)
+    if not success:
+        return False, f"Target branch validation failed: {message}"
+    
+    # Resolve reviewers
+    success, resolved_reviewers = resolve_reviewers(organization, project, reviewers or [])
+    if not success:
+        return False, f"Failed to resolve reviewers: {resolved_reviewers}"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    # Build PR payload
+    payload = {
+        "sourceRefName": f"refs/heads/{source_branch}",
+        "targetRefName": f"refs/heads/{target_branch}",
+        "title": title,
+        "description": description or "",
+        "isDraft": draft
+    }
+    
+    # Add reviewers if provided
+    if resolved_reviewers:
+        payload["reviewers"] = resolved_reviewers
+    
+    # Add work items if provided
+    if work_items:
+        payload["workItemRefs"] = [{"id": str(item_id)} for item_id in work_items]
+    
+    # Add auto-complete settings if requested
+    if auto_complete:
+        payload["completionOptions"] = {
+            "deleteSourceBranch": True,
+            "mergeCommitMessage": f"Merge pull request: {title}",
+            "squashMerge": False
+        }
+    
+    try:
+        # Create the PR
+        api_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullrequests?api-version=7.1"
+        response = requests.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
+        
+        pr_data = response.json()
+        pr_id = pr_data["pullRequestId"]
+        pr_url = pr_data["url"].replace("_apis/git/repositories/", "_git/").replace("/pullrequests/", "/pullrequest/")
+        
+        # Build success message
+        status_text = "draft " if draft else ""
+        work_items_text = f" with work items {', '.join(work_items)}" if work_items else ""
+        reviewers_text = f" and reviewers {', '.join(reviewers)}" if reviewers else ""
+        
+        success_message = f"""✅ Pull Request created successfully!
+
+**PR #{pr_id}**: {title}
+**URL**: {pr_url}
+**Branches**: `{source_branch}` → `{target_branch}`
+**Status**: {status_text}Pull Request{work_items_text}{reviewers_text}
+
+The PR is ready for review and can be accessed at the URL above."""
+        
+        return True, success_message
+        
+    except requests.RequestException as e:
+        return False, f"Failed to create PR: {str(e)}"
+    except (json.JSONDecodeError, KeyError) as e:
+        return False, f"Failed to parse PR creation response: {e}"
+
+class PRInfoExtended(BaseModel):
+    """Extended PR information including iteration data for subsequent tool calls."""
+    id: int
+    title: str
+    description: str
+    source_branch: str
+    target_branch: str
+    author: str
+    status: str
+    created_date: str
+    repository: str
+    organization: str
+    project: str
+    latest_commit_id: str
+    source_commit_id: str
+
+def get_pr_info(pr_url: str) -> tuple[bool, Union[PRInfoExtended, str]]:
+    """Get comprehensive PR information from Azure DevOps using PR URL."""
+    # Parse the PR URL
+    success, url_parts = parse_pr_url(pr_url)
+    if not success:
+        return False, f"Invalid PR URL format. Expected format: https://msazure.visualstudio.com/One/_git/repo/pullrequest/123 or https://dev.azure.com/org/project/_git/repo/pullrequest/123"
+    
+    organization = url_parts['organization']
+    project = url_parts['project']
+    repository = url_parts['repository']
+    pr_id = url_parts['pr_id']
+    
+    # Get basic PR details using Azure CLI
+    org_url = f"https://dev.azure.com/{organization}"
     cmd = [
         "az", "repos", "pr", "show",
         "--id", pr_id,
-        "--organization", organization,
+        "--organization", org_url,
         "--output", "json"
     ]
     
@@ -150,7 +341,39 @@ def get_pr_details(pr_id: str, organization: str) -> tuple[bool, Union[PRInfo, s
     
     try:
         pr_data = json.loads(stdout)
-        pr_info = PRInfo(
+    except (json.JSONDecodeError, KeyError) as e:
+        return False, f"Failed to parse PR data: {e}"
+    
+    # Get iteration information for commit IDs using REST API
+    token_success, token = get_access_token()
+    if not token_success:
+        return False, f"Failed to get access token: {token}"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Get PR iterations to find latest commit IDs
+        api_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations?api-version=7.1"
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()
+        iterations_data = response.json()
+        
+        if not iterations_data.get("value"):
+            return False, "No iterations found in PR"
+        
+        # Get the latest iteration for commit IDs
+        latest_iteration = iterations_data["value"][-1]
+        latest_commit_id = latest_iteration.get("targetRefCommit", {}).get("commitId", "")
+        source_commit_id = latest_iteration.get("sourceRefCommit", {}).get("commitId", "")
+        
+        if not latest_commit_id:
+            return False, "Could not determine latest commit ID from PR iterations"
+        
+        # Build comprehensive PR info
+        pr_info = PRInfoExtended(
             id=pr_data["pullRequestId"],
             title=pr_data["title"],
             description=pr_data.get("description", ""),
@@ -159,13 +382,18 @@ def get_pr_details(pr_id: str, organization: str) -> tuple[bool, Union[PRInfo, s
             author=pr_data["createdBy"]["displayName"],
             status=pr_data["status"],
             created_date=pr_data["creationDate"],
-            repository=pr_data["repository"]["name"],
+            repository=repository,
             organization=organization,
-            project=pr_data["repository"]["project"]["name"]
+            project=project,
+            latest_commit_id=latest_commit_id,
+            source_commit_id=source_commit_id
         )
         return True, pr_info
+        
+    except requests.RequestException as e:
+        return False, f"Failed to get PR iteration info: {str(e)}"
     except (json.JSONDecodeError, KeyError) as e:
-        return False, f"Failed to parse PR data: {e}"
+        return False, f"Failed to parse PR iteration data: {e}"
 
 def get_pr_files(pr_url: str) -> tuple[bool, Union[List[FileChange], str]]:
     """Get list of changed files in PR using REST API from PR URL."""
@@ -239,36 +467,26 @@ def get_pr_files(pr_url: str) -> tuple[bool, Union[List[FileChange], str]]:
     except (json.JSONDecodeError, KeyError) as e:
         return False, f"Failed to parse PR files data: {e}"
 
-def get_file_content(file_path: str, organization: str, project: str, repository: str, commit_id: str) -> tuple[bool, str]:
-    """Get content of a specific file from the repository using REST API."""
+def get_file_content(file_path: str, pr_url: str) -> tuple[bool, str]:
+    """Get content of a specific file from the latest iteration of a Pull Request.
+    
+    This function automatically uses the source commit from the PR's latest iteration,
+    ensuring you always get the file content from the PR changes, not the target branch.
+    """
+    # Parse the PR URL to extract components
+    success, url_parts = parse_pr_url(pr_url)
+    if not success:
+        return False, f"Invalid PR URL format. Expected format: https://msazure.visualstudio.com/One/_git/repo/pullrequest/123 or https://dev.azure.com/org/project/_git/repo/pullrequest/123"
+    
+    # Get access token
     success, token = get_access_token()
     if not success:
         return False, f"Failed to get access token: {token}"
     
-    # Extract organization name from URL and clean it up
-    if organization.startswith('https://'):
-        org_name = organization.split('/')[-1]
-        org_name = org_name.replace('.visualstudio.com', '')
-    else:
-        org_name = organization
-    
-    # Clean up repository name
-    clean_repo = repository.replace('_git/', '').replace('_git', '')
-    
-    # Clean up commit_id - remove any trailing backslashes or special characters
-    clean_commit_id = commit_id.rstrip('\\').strip()
-    
-    # Properly encode the file path for URL
-    encoded_path = urllib.parse.quote(file_path, safe='')
-    
-    # Azure DevOps REST API endpoint for file content
-    # Use proper URL construction with encoded parameters
-    base_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{clean_repo}/items"
-    params = {
-        'path': file_path,
-        'version': clean_commit_id,
-        'api-version': '7.0'
-    }
+    organization = url_parts['organization']
+    project = url_parts['project']
+    repository = url_parts['repository']
+    pr_id = url_parts['pr_id']
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -276,88 +494,93 @@ def get_file_content(file_path: str, organization: str, project: str, repository
     }
     
     try:
-        # Use requests with params to properly encode URL parameters
-        response = requests.get(base_url, headers=headers, params=params)
-        
-        # Log the actual URL for debugging
-        actual_url = response.url
-        
-        if response.status_code == 404:
-            return False, f"File not found: {file_path}. URL attempted: {actual_url}"
-        
-        response.raise_for_status()
-        
-        # Check if content is base64 encoded
-        content_type = response.headers.get('content-type', '')
-        if 'application/json' in content_type:
-            # If JSON response, it might contain base64 encoded content
-            data = response.json()
-            if 'content' in data:
-                try:
-                    # Try to decode base64 content
-                    content = base64.b64decode(data['content']).decode('utf-8')
-                    return True, content
-                except Exception:
-                    return True, data['content']
-            else:
-                return False, "No content found in response"
-        else:
-            # Direct text content
-            return True, response.text
-            
-    except requests.RequestException as e:
-        # Include the attempted URL in error message for debugging
-        return False, f"Failed to get file content: {str(e)}. URL attempted: {response.url if 'response' in locals() else 'URL not constructed'}"
-    except Exception as e:
-        return False, f"Failed to process file content: {str(e)}"
-
-def debug_pr_iteration_info(organization: str, project: str, repository: str, pr_id: str) -> tuple[bool, str]:
-    """Debug function to get PR iteration information for troubleshooting."""
-    success, token = get_access_token()
-    if not success:
-        return False, f"Failed to get access token: {token}"
-    
-    # Clean organization name if it contains URL
-    if organization.startswith('https://'):
-        org_name = organization.split('/')[-1]
-        org_name = org_name.replace('.visualstudio.com', '')
-    else:
-        org_name = organization
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        # Get PR iterations
-        iterations_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations?api-version=7.1"
+        # Step 1: Get PR iterations to find the latest source commit ID
+        iterations_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations?api-version=7.1"
         iterations_response = requests.get(iterations_url, headers=headers)
         iterations_response.raise_for_status()
         iterations_data = iterations_response.json()
         
-        debug_info = f"Iterations URL: {iterations_url}\n\n"
-        debug_info += "PR Iterations:\n"
-        debug_info += json.dumps(iterations_data, indent=2)
+        if not iterations_data.get("value"):
+            return False, "No iterations found in PR"
         
-        if iterations_data.get("value"):
-            latest_iteration = iterations_data["value"][-1]
-            latest_iteration_id = latest_iteration["id"]
+        # Get the latest iteration's source commit ID
+        latest_iteration = iterations_data["value"][-1]
+        source_commit_id = latest_iteration.get("sourceRefCommit", {}).get("commitId")
+        
+        if not source_commit_id:
+            return False, "Could not find source commit ID from PR's latest iteration"
+        
+        # Step 2: Get the commit to find the tree ID
+        commit_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/commits/{source_commit_id}?api-version=7.1"
+        commit_response = requests.get(commit_url, headers=headers)
+        
+        if commit_response.status_code == 404:
+            return False, f"Source commit not found: {source_commit_id}"
+        
+        commit_response.raise_for_status()
+        commit_data = commit_response.json()
+        tree_id = commit_data.get("treeId")
+        
+        if not tree_id:
+            return False, f"Could not find tree ID for source commit {source_commit_id}"
+        
+        # Step 3: Get the tree to find the file's blob ID
+        tree_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/trees/{tree_id}?recursive=true&api-version=7.1"
+        tree_response = requests.get(tree_url, headers=headers)
+        tree_response.raise_for_status()
+        tree_data = tree_response.json()
+        
+        # Find the specific file in the tree
+        file_blob_id = None
+        for tree_entry in tree_data.get("treeEntries", []):
+            if tree_entry.get("relativePath") == file_path.lstrip('/'):
+                if tree_entry.get("gitObjectType") == "blob":
+                    file_blob_id = tree_entry.get("objectId")
+                    break
+        
+        if not file_blob_id:
+            return False, f"File not found in PR source commit: {file_path}"
+        
+        # Step 4: Get the actual file content using the blob ID
+        blob_url = f"https://dev.azure.com/{organization}/{project}/_apis/git/repositories/{repository}/blobs/{file_blob_id}?api-version=7.1"
+        blob_response = requests.get(blob_url, headers=headers)
+        blob_response.raise_for_status()
+        
+        # Handle different response formats
+        content_type = blob_response.headers.get('content-type', '')
+        
+        if 'application/json' in content_type:
+            # Sometimes the response is JSON with base64 content
+            blob_data = blob_response.json()
+            if 'content' in blob_data:
+                try:
+                    # Decode base64 content
+                    content = base64.b64decode(blob_data['content']).decode('utf-8')
+                    return True, content
+                except Exception as e:
+                    return False, f"Failed to decode file content: {e}"
+            else:
+                return False, "No content found in blob response"
+        else:
+            # Direct text content
+            try:
+                return True, blob_response.text
+            except UnicodeDecodeError:
+                # If it's a binary file, return base64 encoded content
+                content_b64 = base64.b64encode(blob_response.content).decode('utf-8')
+                return True, f"[Binary file - base64 encoded]\n{content_b64}"
             
-            # Get changes for latest iteration
-            changes_url = f"https://dev.azure.com/{org_name}/{project}/_apis/git/repositories/{repository}/pullRequests/{pr_id}/iterations/{latest_iteration_id}/changes?api-version=7.1"
-            changes_response = requests.get(changes_url, headers=headers)
-            changes_response.raise_for_status()
-            changes_data = changes_response.json()
-            
-            debug_info += f"\n\nChanges URL: {changes_url}\n\n"
-            debug_info += "Latest Iteration Changes:\n"
-            debug_info += json.dumps(changes_data, indent=2)
-        
-        return True, debug_info
-        
     except requests.RequestException as e:
-        return False, f"Failed to get debug info: {str(e)}"
+        error_msg = f"Failed to get file content from PR: {str(e)}"
+        if hasattr(e, 'response') and e.response is not None:
+            error_msg += f". Status: {e.response.status_code}"
+            if hasattr(e.response, 'url'):
+                error_msg += f". URL attempted: {e.response.url}"
+        return False, error_msg
+    except (json.JSONDecodeError, KeyError) as e:
+        return False, f"Failed to parse API response: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
 
 def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id: str, 
                         comment: str, file_path: Optional[str] = None, 
@@ -386,11 +609,7 @@ def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id
         return False, f"Failed to get access token: {token}"
     
     # Clean organization name if it contains URL
-    if organization.startswith('https://'):
-        org_name = organization.split('/')[-1]
-        org_name = org_name.replace('.visualstudio.com', '')
-    else:
-        org_name = organization
+    org_name = clean_organization_name(organization)
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -502,7 +721,7 @@ def post_pr_comment_rest(organization: str, project: str, repository: str, pr_id
         return False, f"Failed to parse response: {e}"
 
 # Initialize MCP Server
-server = Server("ado-pr-review")
+server = Server("ado-pr")
 
 @server.list_tools()
 async def handle_list_tools() -> List[Tool]:
@@ -518,21 +737,73 @@ async def handle_list_tools() -> List[Tool]:
             }
         ),
         Tool(
-            name="get_pr_details",
-            description="Get details of an Azure DevOps Pull Request",
+            name="create_pr",
+            description="Create a new Pull Request in Azure DevOps with optional work item linking",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "pr_id": {
-                        "type": "string",
-                        "description": "Pull Request ID"
-                    },
                     "organization": {
                         "type": "string",
-                        "description": "Azure DevOps organization URL (e.g., https://dev.azure.com/MyOrganization)"
+                        "description": "Azure DevOps organization name or URL"
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project name"
+                    },
+                    "repository": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "source_branch": {
+                        "type": "string",
+                        "description": "Source branch name"
+                    },
+                    "target_branch": {
+                        "type": "string",
+                        "description": "Target branch name (default: main)"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "PR title"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "PR description"
+                    },
+                    "reviewers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of reviewer emails/usernames"
+                    },
+                    "work_items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of work item IDs to link"
+                    },
+                    "auto_complete": {
+                        "type": "boolean",
+                        "description": "Enable auto-complete when policies pass (default: false)"
+                    },
+                    "draft": {
+                        "type": "boolean",
+                        "description": "Create as draft PR (default: false)"
                     }
                 },
-                "required": ["pr_id", "organization"]
+                "required": ["organization", "project", "repository", "source_branch", "title"]
+            }
+        ),
+        Tool(
+            name="get_pr_info",
+            description="Get comprehensive Pull Request information including metadata and commit IDs for subsequent tool calls",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pr_url": {
+                        "type": "string",
+                        "description": "Full PR URL (e.g., https://msazure.visualstudio.com/One/_git/azlocal-overlay/pullrequest/12479934)"
+                    }
+                },
+                "required": ["pr_url"]
             }
         ),
         Tool(
@@ -551,32 +822,20 @@ async def handle_list_tools() -> List[Tool]:
         ),
         Tool(
             name="get_file_content",
-            description="Get content of a specific file from the repository using REST API",
+            description="Get content of a specific file from the latest iteration of a Pull Request",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file"
+                        "description": "Path to the file in the PR"
                     },
-                    "organization": {
+                    "pr_url": {
                         "type": "string",
-                        "description": "Azure DevOps organization URL (e.g., https://dev.azure.com/MyOrganization)"
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Project name"
-                    },
-                    "repository": {
-                        "type": "string",
-                        "description": "Repository name"
-                    },
-                    "commit_id": {
-                        "type": "string",
-                        "description": "Commit ID to get file content from"
+                        "description": "Full PR URL (e.g., https://msazure.visualstudio.com/One/_git/azlocal-overlay/pullrequest/12479934)"
                     }
                 },
-                "required": ["file_path", "organization", "project", "repository", "commit_id"]
+                "required": ["file_path", "pr_url"]
             }
         ),
         Tool(
@@ -616,32 +875,6 @@ async def handle_list_tools() -> List[Tool]:
                 },
                 "required": ["pr_id", "organization", "project", "repository", "comment"]
             }
-        ),
-        Tool(
-            name="debug_pr_iteration_info",
-            description="Debug tool to get PR iteration information for troubleshooting comment posting issues",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "pr_id": {
-                        "type": "string",
-                        "description": "Pull Request ID"
-                    },
-                    "organization": {
-                        "type": "string",
-                        "description": "Azure DevOps organization name or URL"
-                    },
-                    "project": {
-                        "type": "string",
-                        "description": "Project name"
-                    },
-                    "repository": {
-                        "type": "string",
-                        "description": "Repository name"
-                    }
-                },
-                "required": ["pr_id", "organization", "project", "repository"]
-            }
         )
     ]
 
@@ -654,14 +887,33 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
         status = "✅ Azure CLI Login Status" if success else "❌ Azure CLI Login Status"
         return [TextContent(type="text", text=f"{status}\n\n{message}")]
     
-    elif name == "get_pr_details":
-        pr_id = arguments["pr_id"]
+    elif name == "create_pr":
         organization = arguments["organization"]
+        project = arguments["project"]
+        repository = arguments["repository"]
+        source_branch = arguments["source_branch"]
+        target_branch = arguments.get("target_branch", "main")  # Default to "main"
+        title = arguments["title"]
+        description = arguments.get("description")
+        reviewers = arguments.get("reviewers")
+        work_items = arguments.get("work_items")
+        auto_complete = arguments.get("auto_complete", False)
+        draft = arguments.get("draft", False)
         
-        success, result = get_pr_details(pr_id, organization)
+        success, message = create_pull_request(
+            organization, project, repository, source_branch, target_branch,
+            title, description, reviewers, work_items, auto_complete, draft
+        )
+        
+        return [TextContent(type="text", text=message)]
+    
+    elif name == "get_pr_info":
+        pr_url = arguments["pr_url"]
+        
+        success, result = get_pr_info(pr_url)
         if success:
             pr_info = result
-            details = f"""## Pull Request Details
+            details = f"""## Pull Request Information
 
 **ID:** {pr_info.id}
 **Title:** {pr_info.title}
@@ -675,8 +927,19 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
 
 **Repository:** {pr_info.organization}/{pr_info.project}/{pr_info.repository}
 
+**Commit IDs:**
+- Latest: `{pr_info.latest_commit_id}`
+- Source: `{pr_info.source_commit_id}`
+
 **Description:**
 {pr_info.description or 'No description provided'}
+
+---
+**For subsequent tool calls:**
+- Organization: `{pr_info.organization}`
+- Project: `{pr_info.project}`
+- Repository: `{pr_info.repository}`
+- Use Latest Commit ID: `{pr_info.latest_commit_id}` for `get_file_content`
 """
             return [TextContent(type="text", text=details)]
         else:
@@ -700,12 +963,9 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
     
     elif name == "get_file_content":
         file_path = arguments["file_path"]
-        organization = arguments["organization"]
-        project = arguments["project"]
-        repository = arguments["repository"]
-        commit_id = arguments["commit_id"]
+        pr_url = arguments["pr_url"]
         
-        success, content = get_file_content(file_path, organization, project, repository, commit_id)
+        success, content = get_file_content(file_path, pr_url)
         if success:
             return [TextContent(type="text", text=f"## File Content: {file_path}\n\n```\n{content}\n```")]
         else:
@@ -724,18 +984,6 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[TextCon
         status = "✅" if success else "❌"
         return [TextContent(type="text", text=f"{status} {message}")]
     
-    elif name == "debug_pr_iteration_info":
-        pr_id = arguments["pr_id"]
-        organization = arguments["organization"]
-        project = arguments["project"]
-        repository = arguments["repository"]
-        
-        success, debug_info = debug_pr_iteration_info(organization, project, repository, pr_id)
-        if success:
-            return [TextContent(type="text", text=f"## PR Debug Information\n\n```json\n{debug_info}\n```")]
-        else:
-            return [TextContent(type="text", text=f"❌ Debug Error: {debug_info}")]
-    
     else:
         return [TextContent(type="text", text=f"❌ Unknown tool: {name}")]
 
@@ -746,7 +994,7 @@ async def main():
             read_stream,
             write_stream,
             InitializationOptions(
-                server_name="ado-pr-review",
+                server_name="ado-pr",
                 server_version="1.0.0",
                 capabilities=ServerCapabilities(
                     tools={}
